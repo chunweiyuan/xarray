@@ -2188,7 +2188,7 @@ class Dataset(Mapping, ImplementsDatasetReduce, DataWithCoords):
         return self._replace_vars_and_dims(variables, coord_names,
                                            inplace=inplace)
 
-    def expand_dims(self, dim, axis=None):
+    def expand_dims(self, dims, axis=None):
         """Return a new object with an additional axis (or axes) inserted at
         the corresponding position in the array shape.
 
@@ -2197,9 +2197,11 @@ class Dataset(Mapping, ImplementsDatasetReduce, DataWithCoords):
 
         Parameters
         ----------
-        dim : str or sequence of str.
+        dims : str, sequence of str, or dict.
             Dimensions to include on the new variable.
-            dimensions are inserted with length 1.
+            If provided as str or sequence of str, then dimensions are inserted
+            with length 1.
+
         axis : integer, list (or tuple) of integers, or None
             Axis position(s) where new axis is to be inserted (position(s) on
             the result array). If a list (or tuple) of integers is passed,
@@ -2212,20 +2214,21 @@ class Dataset(Mapping, ImplementsDatasetReduce, DataWithCoords):
         expanded : same type as caller
             This object, but with an additional dimension(s).
         """
-        if isinstance(dim, int):
+        if isinstance(dims, int):
             raise ValueError('dim should be str or sequence of strs or dict')
 
-        if isinstance(dim, str):
-            dim = [dim]
+        if isinstance(dims, str):
+            dims = [dims]
+
         if axis is not None and not isinstance(axis, (list, tuple)):
             axis = [axis]
 
         if axis is None:
-            axis = list(range(len(dim)))
+            axis = list(range(len(dims)))
 
-        if len(dim) != len(axis):
+        if len(dims) != len(axis):
             raise ValueError('lengths of dim and axis should be identical.')
-        for d in dim:
+        for d in dims:
             if d in self.dims:
                 raise ValueError(
                     'Dimension {dim} already exists.'.format(dim=d))
@@ -2235,12 +2238,12 @@ class Dataset(Mapping, ImplementsDatasetReduce, DataWithCoords):
                     '{dim} already exists as coordinate or'
                     ' variable name.'.format(dim=d))
 
-        if len(dim) != len(set(dim)):
+        if len(dims) != len(set(dims)):
             raise ValueError('dims should not contain duplicate values.')
 
         variables = OrderedDict()
         for k, v in self._variables.items():
-            if k not in dim:
+            if k not in dims:
                 if k in self._coord_names:  # Do not change coordinates
                     variables[k] = v
                 else:
@@ -2259,11 +2262,20 @@ class Dataset(Mapping, ImplementsDatasetReduce, DataWithCoords):
                                          ' values.')
                     # We need to sort them to make sure `axis` equals to the
                     # axis positions of the result array.
-                    zip_axis_dim = sorted(zip(axis_pos, dim))
+                    if utils.is_dict_like(dims):
+                        zip_axis_dim = sorted(zip(axis_pos, dims.items()))
 
-                    all_dims = list(v.dims)
-                    for a, d in zip_axis_dim:
-                        all_dims.insert(a, d)
+                        all_dims = list(zip(v.dims, v.shape))
+                        for a, d in zip_axis_dim:
+                            all_dims.insert(a, d)
+                        all_dims = OrderedDict(all_dims)
+                    else:
+                        zip_axis_dim = sorted(zip(axis_pos, dims))
+
+                        all_dims = list(v.dims)
+                        for a, d in zip_axis_dim:
+                            all_dims.insert(a, d)
+
                     variables[k] = v.set_dims(all_dims)
             else:
                 # If dims includes a label of a non-dimension coordinate,

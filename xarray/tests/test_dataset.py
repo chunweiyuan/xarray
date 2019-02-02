@@ -2005,13 +2005,13 @@ class TestDataset(object):
                            attrs={'key': 'entry'})
 
         with raises_regex(ValueError, 'already exists'):
-            original.expand_dims(dim=['x'])
+            original.expand_dims(dims=['x'])
 
         # Make sure it raises true error also for non-dimensional coordinates
         # which has dimension.
         original = original.set_coords('z')
         with raises_regex(ValueError, 'already exists'):
-            original.expand_dims(dim=['z'])
+            original.expand_dims(dims=['z'])
 
     def test_expand_dims(self):
         original = Dataset({'x': ('a', np.random.randn(3)),
