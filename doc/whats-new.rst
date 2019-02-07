@@ -77,6 +77,11 @@ Enhancements
   be outside the :py:class:`pandas.Timestamp`-valid range (:issue:`2754`).  By
   `Spencer Clark <https://github.com/spencerkclark>`_. 
   
+- Allow ``expand_dims`` method to support inserting/broadcasting dimensions
+  with size > 1. (:issue:`2710`)
+  By `Martin Pletcher <https://github.com/pletchm>`_.
+
+
 Bug fixes
 ~~~~~~~~~
 
