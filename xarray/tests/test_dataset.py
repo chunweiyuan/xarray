@@ -16,7 +16,7 @@ from xarray import (
     ALL_DIMS, DataArray, Dataset, IndexVariable, MergeError, Variable, align,
     backends, broadcast, open_dataset, set_options)
 from xarray.core import dtypes, indexing, npcompat, utils
-from xarray.core.common import full_like
+from xarray.core.common import duck_array_ops, full_like
 from xarray.core.pycompat import integer_types
 
 from . import (
@@ -1416,7 +1416,7 @@ class TestDataset(object):
         assert_identical(actual['b'].drop('y'), idx_y['b'])
 
         with pytest.raises(KeyError):
-            data.sel_points(x=[2.5], y=[2.0], method='pad', tolerance=1e-3)
+            data.sel(x=[2.5], y=[2.0], method='pad', tolerance=1e-3)
 
     def test_sel_method(self):
         data = create_test_data()
@@ -2013,6 +2013,19 @@ class TestDataset(object):
         with raises_regex(ValueError, 'already exists'):
             original.expand_dims(dims=['z'])
 
+        original = Dataset({'x': ('a', np.random.randn(3)),
+                            'y': (['b', 'a'], np.random.randn(4, 3)),
+                            'z': ('a', np.random.randn(3))},
+                           coords={'a': np.linspace(0, 1, 3),
+                                   'b': np.linspace(0, 1, 4),
+                                   'c': np.linspace(0, 1, 5)},
+                           attrs={'key': 'entry'})
+        with raises_regex(TypeError, 'value of new dimension'):
+            original.expand_dims(OrderedDict((("d", 3.2),)))
+
+        with raises_regex(ValueError, 'both keyword and positional'):
+            original.expand_dims(OrderedDict((("d", 4),)), e=4)
+
     def test_expand_dims(self):
         original = Dataset({'x': ('a', np.random.randn(3)),
                             'y': (['b', 'a'], np.random.randn(4, 3))},
@@ -2045,6 +2058,44 @@ class TestDataset(object):
         # make sure squeeze restores the original data set.
         roundtripped = actual.squeeze('z')
         assert_identical(original, roundtripped)
+
+        # Test expanding one dimension to have size > 1 that doesn't have
+        # coordinates, and also expanding another dimension to have size > 1
+        # that DOES have coordinates.
+        actual = original.expand_dims(
+            OrderedDict((("d", 4), ("e", ["l", "m", "n"]))))
+
+        expected = Dataset(
+            {'x': xr.DataArray(original['x'].values * np.ones([4, 3, 3]),
+                               coords=dict(d=range(4),
+                                           e=['l', 'm', 'n'],
+                                           a=np.linspace(0, 1, 3)),
+                               dims=['d', 'e', 'a']).drop('d'),
+             'y': xr.DataArray(original['y'].values * np.ones([4, 3, 4, 3]),
+                               coords=dict(d=range(4),
+                                           e=['l', 'm', 'n'],
+                                           b=np.linspace(0, 1, 4),
+                                           a=np.linspace(0, 1, 3)),
+                               dims=['d', 'e', 'b', 'a']).drop('d')},
+            coords={'c': np.linspace(0, 1, 5)},
+            attrs={'key': 'entry'})
+        assert_identical(actual, expected)
+
+        # Test with kwargs instead of passing dict to dim arg.
+        other_way = original.expand_dims(e=["l", "m", "n"])
+        other_way_expected = Dataset(
+            {'x': xr.DataArray(original['x'].values * np.ones([3, 3]),
+                               coords=dict(e=['l', 'm', 'n'],
+                                           a=np.linspace(0, 1, 3)),
+                               dims=['e', 'a']),
+             'y': xr.DataArray(original['y'].values * np.ones([3, 4, 3]),
+                               coords=dict(e=['l', 'm', 'n'],
+                                           b=np.linspace(0, 1, 4),
+                                           a=np.linspace(0, 1, 3)),
+                               dims=['e', 'b', 'a'])},
+            coords={'c': np.linspace(0, 1, 5)},
+            attrs={'key': 'entry'})
+        assert_identical(other_way_expected, other_way)
 
     def test_set_index(self):
         expected = create_test_multiindex()
@@ -2980,6 +3031,15 @@ class TestDataset(object):
         expected = pd.DataFrame([[]], index=idx)
         assert expected.equals(actual), (expected, actual)
 
+    def test_to_and_from_empty_dataframe(self):
+        # GH697
+        expected = pd.DataFrame({'foo': []})
+        ds = Dataset.from_dataframe(expected)
+        assert len(ds['foo']) == 0
+        actual = ds.to_dataframe()
+        assert len(actual) == 0
+        assert expected.equals(actual)
+
     def test_from_dataframe_non_unique_columns(self):
         # regression test for GH449
         df = pd.DataFrame(np.zeros((2, 2)))
@@ -3624,11 +3684,28 @@ class TestDataset(object):
         actual = ds.reduce(mean_only_one_axis, 'y')
         assert_identical(expected, actual)
 
-        with raises_regex(TypeError, 'non-integer axis'):
+        with raises_regex(TypeError, "missing 1 required positional argument: "
+                                     "'axis'"):
             ds.reduce(mean_only_one_axis)
 
         with raises_regex(TypeError, 'non-integer axis'):
-            ds.reduce(mean_only_one_axis, ['x', 'y'])
+            ds.reduce(mean_only_one_axis, axis=['x', 'y'])
+
+    def test_reduce_no_axis(self):
+
+        def total_sum(x):
+            return np.sum(x.flatten())
+
+        ds = Dataset({'a': (['x', 'y'], [[0, 1, 2, 3, 4]])})
+        expected = Dataset({'a': ((), 10)})
+        actual = ds.reduce(total_sum)
+        assert_identical(expected, actual)
+
+        with raises_regex(TypeError, "unexpected keyword argument 'axis'"):
+            ds.reduce(total_sum, axis=0)
+
+        with raises_regex(TypeError, "unexpected keyword argument 'axis'"):
+            ds.reduce(total_sum, dim='x')
 
     def test_quantile(self):
 
@@ -4667,7 +4744,7 @@ def test_differentiate_datetime(dask):
     actual = da.differentiate('x', edge_order=1, datetime_unit='D')
     expected_x = xr.DataArray(
         npcompat.gradient(
-            da, utils.datetime_to_numeric(da['x'], datetime_unit='D'),
+            da, da['x'].variable._to_numeric(datetime_unit='D'),
             axis=0, edge_order=1), dims=da.dims, coords=da.coords)
     assert_equal(expected_x, actual)
 
@@ -4701,7 +4778,7 @@ def test_differentiate_cftime(dask):
 
     actual = da.differentiate('time', edge_order=1, datetime_unit='D')
     expected_data = npcompat.gradient(
-        da, utils.datetime_to_numeric(da['time'], datetime_unit='D'),
+        da, da['time'].variable._to_numeric(datetime_unit='D'),
         axis=0, edge_order=1)
     expected = xr.DataArray(expected_data, coords=da.coords, dims=da.dims)
     assert_equal(expected, actual)
@@ -4780,7 +4857,8 @@ def test_trapz_datetime(dask, which_datetime):
 
     actual = da.integrate('time', datetime_unit='D')
     expected_data = np.trapz(
-        da, utils.datetime_to_numeric(da['time'], datetime_unit='D'), axis=0)
+        da, duck_array_ops.datetime_to_numeric(da['time'], datetime_unit='D'),
+        axis=0)
     expected = xr.DataArray(
         expected_data, dims=['y'],
         coords={k: v for k, v in da.coords.items() if 'time' not in v.dims})
