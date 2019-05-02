@@ -1916,7 +1916,7 @@ class IndexVariable(Variable):
             New object with dimensions, attributes, encodings, and optionally
             data copied from original.
         """
-        if data is None:
+        if data is None:  # test test test
             data = self._data
         else:
             data = as_compatible_data(data)
